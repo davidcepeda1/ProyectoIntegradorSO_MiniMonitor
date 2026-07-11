@@ -17,6 +17,13 @@ para no saturarlo) con las teclas `[P]` y `[U]`.
 - `[V]` Visualizar historial de capturas almacenadas (permite ver el detalle completo de una captura por su ID).
 - `[E]` Editar etiquetas de un registro del historial.
 - `[D]` Eliminar un registro del historial.
-- `[P]` Ver lista de procesos (PID, nombre, estado, usuario).
-- `[U]` Ver usuarios conectados y tiempo de conexión.
+- `[P]` Ver lista de procesos (PID, nombre, estado, usuario), con scroll.
+- `[U]` Ver usuarios conectados y tiempo de conexión, con scroll.
 - `[Q]` o `Ctrl+C` Salir de la aplicación.
+
+Dentro de las vistas `[P]` y `[U]` (listas con posiblemente más filas de las
+que caben en pantalla): `↑`/`↓` mueve una fila, `RePág`/`AvPág` mueve una
+página completa, `Inicio`/`Fin` salta al principio/final de la lista, y una
+barra de desplazamiento vertical en el borde derecho indica la posición
+actual dentro del total (estilo btop). `[Q]` o `Enter` regresa al panel
+principal.

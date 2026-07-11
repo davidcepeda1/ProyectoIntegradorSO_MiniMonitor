@@ -1,8 +1,10 @@
 """Interfaz interactiva de terminal (TUI) del Mini Monitor de Recursos.
 
 Usa `curses` (librería estándar, sin dependencias externas) para un panel
-estilo htop con CPU, RAM, Disco y Red, más un menú inferior para las
-operaciones CRUD sobre el historial de capturas.
+estilo btop/htop: secciones en cajas con borde, barras de uso para CPU,
+RAM, Swap y Disco, listas de Procesos/Usuarios con scroll real (flechas,
+RePág/AvPág) y barra de desplazamiento vertical, más un menú inferior para
+las operaciones CRUD sobre el historial de capturas.
 
 El hilo principal es el único que controla la pantalla (curses no es
 thread-safe); los Hilos A/B, definidos en src/main.py, solo actualizan el
@@ -31,7 +33,34 @@ def _configurar_colores() -> None:
 
 
 def _escribir(stdscr, fila: int, columna: int, ancho: int, texto: str, atributo=0) -> None:
-    stdscr.addstr(fila, columna, texto[:max(ancho - columna - 1, 0)], atributo)
+    # Se permite escribir hasta la ultima columna (ancho - 1): curses solo
+    # prohibe escribir en la celda inferior-derecha exacta de la ventana,
+    # y esa excepcion puntual se descarta con el try/except.
+    try:
+        stdscr.addstr(fila, columna, texto[:max(ancho - columna, 0)], atributo)
+    except curses.error:
+        pass
+
+
+def _dibujar_caja(stdscr, fila0: int, ancho: int, alto_contenido: int, titulo: str) -> tuple[int, int]:
+    """Dibuja una caja con borde y título (estilo btop). Devuelve (fila_contenido, columna_contenido)."""
+    alto_caja = alto_contenido + 2
+    _escribir(stdscr, fila0, 0, ancho, "┌" + "─" * max(ancho - 2, 0) + "┐")
+    for i in range(1, alto_caja - 1):
+        _escribir(stdscr, fila0 + i, 0, ancho, "│")
+        _escribir(stdscr, fila0 + i, ancho - 1, ancho, "│")
+    _escribir(stdscr, fila0 + alto_caja - 1, 0, ancho, "└" + "─" * max(ancho - 2, 0) + "┘")
+    _escribir(stdscr, fila0, 2, ancho, f"┤ {titulo} ├", curses.A_BOLD | curses.color_pair(COLOR_TITULO))
+    return fila0 + 1, 2
+
+
+def _dibujar_barra(stdscr, fila: int, columna: int, ancho_barra: int, porcentaje: float,
+                    color: int, ancho_total: int) -> None:
+    porcentaje = max(0.0, min(porcentaje, 100.0))
+    llenos = int(round(ancho_barra * porcentaje / 100))
+    barra = "█" * llenos + "░" * (ancho_barra - llenos)
+    _escribir(stdscr, fila, columna, ancho_total, barra, curses.color_pair(color))
+    _escribir(stdscr, fila, columna + ancho_barra + 1, ancho_total, f"{porcentaje:5.1f}%")
 
 
 def _dibujar_panel(stdscr, estado: EstadoMonitor) -> None:
@@ -42,53 +71,75 @@ def _dibujar_panel(stdscr, estado: EstadoMonitor) -> None:
     stdscr.addstr(0, 0, " MINI MONITOR DE RECURSOS ".center(ancho, "="),
                   curses.color_pair(COLOR_TITULO) | curses.A_BOLD)
 
-    fila = 2
+    ancho_barra = max(min(ancho - 24, 40), 10)
+    fila = 1
+
+    # --- CPU ---
+    f, c = _dibujar_caja(stdscr, fila, ancho, 3, "cpu")
     uso_cpu = cpu.get("uso_porcentaje", 0.0)
     color_cpu = COLOR_ALERTA if uso_cpu > 80 else COLOR_OK
-    _escribir(stdscr, fila, 2, ancho, "CPU", curses.A_BOLD); fila += 1
-    _escribir(stdscr, fila, 4, ancho, f"Nucleos: {cpu.get('nucleos', '?')}    "
-              f"Frecuencia: {cpu.get('frecuencia_mhz', '?')} MHz"); fila += 1
-    _escribir(stdscr, fila, 4, ancho, f"Uso: {uso_cpu}%", curses.color_pair(color_cpu)); fila += 1
-    _escribir(stdscr, fila, 4, ancho, f"Carga (1/5/15 min): {cpu.get('carga_1min', '?')} / "
-              f"{cpu.get('carga_5min', '?')} / {cpu.get('carga_15min', '?')}"); fila += 2
+    _escribir(stdscr, f, c, ancho, f"Nucleos: {cpu.get('nucleos', '?')}   "
+              f"Frecuencia: {cpu.get('frecuencia_mhz', '?')} MHz")
+    _dibujar_barra(stdscr, f + 1, c, ancho_barra, uso_cpu, color_cpu, ancho)
+    _escribir(stdscr, f + 2, c, ancho, f"Carga (1/5/15 min): {cpu.get('carga_1min', '?')} / "
+              f"{cpu.get('carga_5min', '?')} / {cpu.get('carga_15min', '?')}")
+    fila = f + 3 + 1
 
+    # --- MEMORIA ---
     ram_total = memoria.get("ram_total_kb", 0)
     ram_usada = memoria.get("ram_usada_kb", 0)
     porcentaje_ram = (ram_usada / ram_total * 100) if ram_total else 0.0
     color_ram = COLOR_ALERTA if porcentaje_ram > 85 else COLOR_OK
-    _escribir(stdscr, fila, 2, ancho, "MEMORIA", curses.A_BOLD); fila += 1
-    _escribir(stdscr, fila, 4, ancho, f"Total: {ram_total} KB   Usada: {ram_usada} KB "
-              f"({porcentaje_ram:.1f}%)", curses.color_pair(color_ram)); fila += 1
-    _escribir(stdscr, fila, 4, ancho, f"Libre: {memoria.get('ram_libre_kb', '?')} KB"); fila += 1
-    _escribir(stdscr, fila, 4, ancho, f"Swap: {memoria.get('swap_usada_kb', '?')} / "
-              f"{memoria.get('swap_total_kb', '?')} KB usada   "
-              f"Libre: {memoria.get('swap_libre_kb', '?')} KB"); fila += 2
+    swap_total = memoria.get("swap_total_kb", 0)
+    swap_usada = memoria.get("swap_usada_kb", 0)
+    porcentaje_swap = (swap_usada / swap_total * 100) if swap_total else 0.0
 
-    _escribir(stdscr, fila, 2, ancho, "DISCO (/)", curses.A_BOLD); fila += 1
+    f, c = _dibujar_caja(stdscr, fila, ancho, 4, "mem")
+    _dibujar_barra(stdscr, f, c, ancho_barra, porcentaje_ram, color_ram, ancho)
+    _escribir(stdscr, f, c + ancho_barra + 10, ancho, "RAM")
+    _escribir(stdscr, f + 1, c, ancho, f"Total: {ram_total} KB   Usada: {ram_usada} KB   "
+              f"Libre: {memoria.get('ram_libre_kb', '?')} KB")
+    _dibujar_barra(stdscr, f + 2, c, ancho_barra, porcentaje_swap, COLOR_OK, ancho)
+    _escribir(stdscr, f + 2, c + ancho_barra + 10, ancho, "SWAP")
+    _escribir(stdscr, f + 3, c, ancho, f"Total: {swap_total} KB   Usada: {swap_usada} KB   "
+              f"Libre: {memoria.get('swap_libre_kb', '?')} KB")
+    fila = f + 4 + 1
+
+    # --- DISCO ---
+    f, c = _dibujar_caja(stdscr, fila, ancho, 2, "disco (/)")
     try:
         disco = cmd_runner.obtener_disco_principal()
-        _escribir(stdscr, fila, 4, ancho, f"Total: {disco['total_kb']} KB   "
-                  f"Usado: {disco['usado_kb']} KB ({disco['porcentaje']})   "
-                  f"Libre: {disco['libre_kb']} KB")
-    except RuntimeError as error:
-        _escribir(stdscr, fila, 4, ancho, f"Error: {error}")
-    fila += 2
+        porcentaje_disco = float(disco["porcentaje"].strip("%") or 0)
+        color_disco = COLOR_ALERTA if porcentaje_disco > 90 else COLOR_OK
+        _dibujar_barra(stdscr, f, c, ancho_barra, porcentaje_disco, color_disco, ancho)
+        _escribir(stdscr, f + 1, c, ancho, f"Total: {disco['total_kb']} KB   "
+                  f"Usado: {disco['usado_kb']} KB   Libre: {disco['libre_kb']} KB")
+    except (RuntimeError, ValueError) as error:
+        _escribir(stdscr, f, c, ancho, f"Error: {error}")
+    fila = f + 2 + 1
 
+    # --- RED ---
     alerta_red = estado.hay_alerta_red()
     color_red = COLOR_ALERTA if alerta_red else COLOR_OK
     estado_red = "PICO DETECTADO" if alerta_red else "estable"
-    _escribir(stdscr, fila, 2, ancho, "RED", curses.A_BOLD); fila += 1
-    _escribir(stdscr, fila, 4, ancho, f"Estado: {estado_red}", curses.color_pair(color_red)); fila += 1
     try:
-        for interfaz in cmd_runner.obtener_red():
-            if fila >= alto - 2:
-                break
+        interfaces = cmd_runner.obtener_red()
+        error_red = None
+    except RuntimeError as error:
+        interfaces = []
+        error_red = str(error)
+
+    espacio_disponible = max(alto - fila - 3, 2)
+    alto_red = min(1 + max(len(interfaces), 1), espacio_disponible)
+    f, c = _dibujar_caja(stdscr, fila, ancho, alto_red, "red")
+    _escribir(stdscr, f, c, ancho, f"Estado: {estado_red}", curses.color_pair(color_red))
+    if error_red:
+        _escribir(stdscr, f + 1, c, ancho, f"Error: {error_red}")
+    else:
+        for i, interfaz in enumerate(interfaces[:alto_red - 1]):
             linea = (f"{interfaz['interfaz']:<10} {interfaz['ip']:<18} "
                      f"RX: {interfaz['rx_bytes']:>12}  TX: {interfaz['tx_bytes']:>12}")
-            _escribir(stdscr, fila, 4, ancho, linea)
-            fila += 1
-    except RuntimeError as error:
-        _escribir(stdscr, fila, 4, ancho, f"Error: {error}")
+            _escribir(stdscr, f + 1 + i, c, ancho, linea)
 
     menu = "[C]Crear [V]Historial [E]Editar [D]Eliminar [P]Procesos [U]Usuarios [Q]Salir"
     stdscr.addstr(alto - 1, 0, menu.center(ancho, " ")[:ancho - 1], curses.A_REVERSE)
@@ -118,6 +169,14 @@ def _leer_texto(stdscr, prompt: str) -> str:
         stdscr.nodelay(True)
         stdscr.timeout(REFRESCO_MS)
     return texto
+
+
+def _esperar_tecla(stdscr) -> None:
+    stdscr.nodelay(False)
+    stdscr.timeout(-1)
+    stdscr.getch()
+    stdscr.nodelay(True)
+    stdscr.timeout(REFRESCO_MS)
 
 
 def _mostrar_mensaje(stdscr, mensaje: str) -> None:
@@ -236,61 +295,95 @@ def _eliminar_registro(stdscr) -> None:
     _mostrar_mensaje(stdscr, "Captura eliminada." if exito else "No se encontro esa captura.")
 
 
-def _esperar_tecla(stdscr) -> None:
+def _vista_lista_desplazable(stdscr, titulo: str, encabezado: str, obtener_filas) -> None:
+    """Vista de lista con scroll real (flechas, RePag/AvPag, Inicio/Fin) y una
+    barra de desplazamiento vertical estilo btop en el borde derecho.
+
+    `obtener_filas()` se llama cada vez que el usuario navega y debe devolver
+    una lista de strings ya formateados (una línea por fila de datos).
+    """
+    offset = 0
     stdscr.nodelay(False)
     stdscr.timeout(-1)
-    stdscr.getch()
-    stdscr.nodelay(True)
-    stdscr.timeout(REFRESCO_MS)
+    stdscr.keypad(True)
+    try:
+        while True:
+            filas_texto = obtener_filas()
+            alto, ancho = stdscr.getmaxyx()
+            alto_util = max(alto - 5, 1)
+            total = len(filas_texto)
+            offset = max(0, min(offset, max(total - alto_util, 0)))
+
+            stdscr.erase()
+            stdscr.addstr(0, 0, f" {titulo} ".center(ancho, "="), curses.A_BOLD)
+            _escribir(stdscr, 2, 2, ancho, encabezado, curses.A_UNDERLINE)
+
+            columna_barra = ancho - 2
+            mostrar_barra = total > alto_util > 0
+            ancho_texto = (columna_barra - 1) if mostrar_barra else ancho
+
+            for i, linea in enumerate(filas_texto[offset:offset + alto_util]):
+                _escribir(stdscr, 3 + i, 2, ancho_texto, linea)
+
+            if mostrar_barra:
+                proporcion = alto_util / total
+                largo_indicador = max(1, int(alto_util * proporcion))
+                maximo_offset = max(total - alto_util, 1)
+                inicio_indicador = int(offset / maximo_offset * (alto_util - largo_indicador))
+                for i in range(alto_util):
+                    caracter = "█" if inicio_indicador <= i < inicio_indicador + largo_indicador else "│"
+                    _escribir(stdscr, 3 + i, columna_barra, ancho, caracter)
+
+            if total:
+                pie = (f"Mostrando {offset + 1}-{min(offset + alto_util, total)} de {total}   "
+                       f"[flechas] mover  [RePag/AvPag] pagina  [Inicio/Fin]  [Q/Enter] volver")
+            else:
+                pie = "Sin datos.  [Q/Enter] volver"
+            _escribir(stdscr, alto - 1, 2, ancho, pie, curses.A_DIM)
+            stdscr.refresh()
+
+            tecla = stdscr.getch()
+            if tecla == curses.KEY_UP:
+                offset -= 1
+            elif tecla == curses.KEY_DOWN:
+                offset += 1
+            elif tecla == curses.KEY_PPAGE:
+                offset -= alto_util
+            elif tecla == curses.KEY_NPAGE:
+                offset += alto_util
+            elif tecla == curses.KEY_HOME:
+                offset = 0
+            elif tecla == curses.KEY_END:
+                offset = max(total - alto_util, 0)
+            elif tecla in (ord("q"), ord("Q"), 27, 10, 13):
+                return
+    finally:
+        stdscr.nodelay(True)
+        stdscr.timeout(REFRESCO_MS)
 
 
 def _ver_procesos(stdscr) -> None:
-    try:
-        procesos = cmd_runner.obtener_procesos()
-    except RuntimeError as error:
-        _mostrar_mensaje(stdscr, f"Error al listar procesos: {error}")
-        return
+    def obtener_filas() -> list[str]:
+        try:
+            procesos = cmd_runner.obtener_procesos()
+        except RuntimeError as error:
+            return [f"Error al listar procesos: {error}"]
+        return [f"{p['pid']:<8}{p['nombre']:<24}{p['estado']:<8}{p['usuario']:<15}" for p in procesos]
 
-    stdscr.erase()
-    alto, ancho = stdscr.getmaxyx()
-    stdscr.addstr(0, 0, " PROCESOS (cualquier tecla para volver) ".center(ancho, "="), curses.A_BOLD)
-
-    encabezado = f"{'PID':<8}{'NOMBRE':<22}{'ESTADO':<8}{'USUARIO':<15}"
-    _escribir(stdscr, 2, 2, ancho, encabezado, curses.A_UNDERLINE)
-
-    visibles = max(alto - 6, 0)
-    for fila, proceso in enumerate(procesos[:visibles], start=3):
-        linea = f"{proceso['pid']:<8}{proceso['nombre']:<22}{proceso['estado']:<8}{proceso['usuario']:<15}"
-        _escribir(stdscr, fila, 2, ancho, linea)
-
-    _escribir(stdscr, alto - 2, 2, ancho,
-              f"Mostrando {min(len(procesos), visibles)} de {len(procesos)} procesos.")
-    stdscr.refresh()
-    _esperar_tecla(stdscr)
+    encabezado = f"{'PID':<8}{'NOMBRE':<24}{'ESTADO':<8}{'USUARIO':<15}"
+    _vista_lista_desplazable(stdscr, "PROCESOS", encabezado, obtener_filas)
 
 
 def _ver_usuarios(stdscr) -> None:
-    try:
-        usuarios = cmd_runner.obtener_usuarios()
-    except RuntimeError as error:
-        _mostrar_mensaje(stdscr, f"Error al listar usuarios: {error}")
-        return
+    def obtener_filas() -> list[str]:
+        try:
+            usuarios = cmd_runner.obtener_usuarios()
+        except RuntimeError as error:
+            return [f"Error al listar usuarios: {error}"]
+        return [f"{u['usuario']:<15}{u['terminal']:<12}{u['tiempo_conexion']:<20}" for u in usuarios]
 
-    stdscr.erase()
-    alto, ancho = stdscr.getmaxyx()
-    stdscr.addstr(0, 0, " USUARIOS CONECTADOS (cualquier tecla para volver) ".center(ancho, "="), curses.A_BOLD)
-
-    if not usuarios:
-        _escribir(stdscr, 2, 2, ancho, "No hay usuarios con sesion registrada por 'who'.")
-    else:
-        encabezado = f"{'USUARIO':<15}{'TERMINAL':<12}{'TIEMPO DE CONEXION':<20}"
-        _escribir(stdscr, 2, 2, ancho, encabezado, curses.A_UNDERLINE)
-        for fila, usuario in enumerate(usuarios[:alto - 5], start=3):
-            linea = f"{usuario['usuario']:<15}{usuario['terminal']:<12}{usuario['tiempo_conexion']:<20}"
-            _escribir(stdscr, fila, 2, ancho, linea)
-
-    stdscr.refresh()
-    _esperar_tecla(stdscr)
+    encabezado = f"{'USUARIO':<15}{'TERMINAL':<12}{'TIEMPO DE CONEXION':<20}"
+    _vista_lista_desplazable(stdscr, "USUARIOS CONECTADOS", encabezado, obtener_filas)
 
 
 def _bucle_principal(stdscr, estado: EstadoMonitor) -> None:
