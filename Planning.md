@@ -58,6 +58,8 @@ Para asegurar la máxima nota y cubrir los criterios de evaluación del docente,
 > [cite_start]4. **Módulo Red:** Interfaces, IPs y estadísticas básicas usando `ip` o leyendo `/proc/net/dev`[cite: 66, 84].
 > Asegúrate de limpiar las cadenas de texto (`stdout.decode()`) y estructurar los retornos como listas de diccionarios.
 
+* **Nota de diseño (implementada):** Para el Módulo Red se combinaron dos fuentes: el comando `ip -o -4 addr show` (subprocess) para listar interfaces y direcciones IP —cumple el requisito de ejecución de comandos Linux—, y `/proc/net/dev` para los contadores de tráfico (bytes recibidos/enviados), ya que su formato de texto fijo es mucho más estable de parsear que la salida human-readable de `ip -s link`. Para el Módulo Usuarios, `who` solo reporta la hora de login; se calculó la duración de la sesión (`ahora - login`) para que "tiempo de conexión" sea un dato real y no solo un timestamp. Todos los comandos se ejecutan con `subprocess.run(lista_de_args, ...)` sin `shell=True`, evitando inyección de comandos.
+
 ---
 
 ### [cite_start]🔀 Semana 4: Concurrencia Avanzada (Fork, Hilos y CRUD Completo) [cite: 131, 132, 133]
