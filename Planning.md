@@ -40,6 +40,8 @@ Para asegurar la máxima nota y cubrir los criterios de evaluación del docente,
 > [cite_start]2. `/proc/meminfo` para obtener: Memoria RAM total, utilizada, libre y memoria Swap[cite: 65].
 > No uses librerías externas como `psutil`. Devuelve la información en diccionarios limpios de Python. Incluye manejo de excepciones si los archivos no existen o no se pueden leer.
 
+* **Nota de diseño (implementada):** `/proc/loadavg` reporta la *carga promedio* (cola de procesos esperando CPU), no un porcentaje de uso — puede superar 100 fácilmente y no equivale a "% de utilización". Se mantiene como métrica informativa (cumple el requisito de usar el archivo), pero el **% de uso de CPU real** se calcula con el método estándar de SO: leer `/proc/stat` dos veces con un pequeño intervalo (`time.sleep`) y calcular `(1 - delta_idle / delta_total) * 100` sobre los jiffies acumulados.
+
 ---
 
 ### [cite_start]🛜 Semana 3: Módulos Complementarios (Disco, Red, Usuarios y Procesos) [cite: 127, 129]
