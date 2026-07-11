@@ -1,10 +1,10 @@
 # Mini Monitor de Recursos Linux
 
-Monitor de recursos del sistema para Linux con interfaz de terminal (TUI) estilo `btop`, desarrollado en Python 3 puro (sin dependencias externas) como Proyecto Integrador de la asignatura de Sistemas Operativos.
+Monitor de recursos del sistema para Linux con interfaz de terminal (TUI), desarrollado en Python 3 puro (sin dependencias externas) como Proyecto Integrador de la asignatura de Sistemas Operativos.
 
 Permite visualizar en tiempo real el estado de CPU, Memoria, Disco, Red, Procesos y Usuarios, y llevar un historial de "capturas" del estado del sistema con operaciones CRUD completas y un sistema de etiquetas.
 
-![Panel principal de referencia (btop)](btop.png)
+![Panel principal](Terminal.png)
 
 ---
 
@@ -40,14 +40,14 @@ Cobertura completa de `ProyectoIntegradorSO.md` (ver también el detalle semana 
 
 ### Módulos de monitoreo (Sección 4)
 
-| Módulo | Datos mostrados | Origen |
-|---|---|---|
-| **CPU** | Núcleos, frecuencia (MHz), % de uso, carga promedio (1/5/15 min) | `/proc/cpuinfo`, `/proc/loadavg`, `/proc/stat` |
-| **Memoria** | Total, usada, libre, Swap (total/usada/libre) | `/proc/meminfo` |
-| **Procesos** | PID, nombre, estado, usuario propietario | `ps` |
-| **Usuarios** | Usuarios conectados, tiempo de conexión | `who` (con respaldo automático en `loginctl` / `w`) |
-| **Disco** | Espacio total, usado, libre | `df` |
-| **Red** | Interfaces, direcciones IP, tráfico (bytes RX/TX) | `ip` + `/proc/net/dev` |
+| Módulo       | Datos mostrados                                                  | Origen                                              |
+| ------------ | ---------------------------------------------------------------- | --------------------------------------------------- |
+| **CPU**      | Núcleos, frecuencia (MHz), % de uso, carga promedio (1/5/15 min) | `/proc/cpuinfo`, `/proc/loadavg`, `/proc/stat`      |
+| **Memoria**  | Total, usada, libre, Swap (total/usada/libre)                    | `/proc/meminfo`                                     |
+| **Procesos** | PID, nombre, estado, usuario propietario                         | `ps`                                                |
+| **Usuarios** | Usuarios conectados, tiempo de conexión                          | `who` (con respaldo automático en `loginctl` / `w`) |
+| **Disco**    | Espacio total, usado, libre                                      | `df`                                                |
+| **Red**      | Interfaces, direcciones IP, tráfico (bytes RX/TX)                | `ip` + `/proc/net/dev`                              |
 
 ### Requisitos técnicos obligatorios (Sección 5)
 
@@ -160,15 +160,15 @@ Ver también [`docs/manual_ejecucion.md`](docs/manual_ejecucion.md) para el deta
 
 ## Controles de la interfaz
 
-| Tecla | Acción |
-|---|---|
-| `[C]` | Crear una captura del estado actual del sistema (pide etiquetas). |
-| `[V]` | Ver historial de capturas (filtro por etiqueta, detalle completo por ID, incluye Procesos/Usuarios de ese momento). |
-| `[E]` | Editar las etiquetas de una captura (pide ID numérico + confirmación). |
-| `[D]` | Eliminar una captura (pide ID numérico + confirmación). |
-| `[P]` | Ver la lista completa de procesos en vivo, con scroll. |
-| `[U]` | Ver usuarios conectados en vivo, con scroll. |
-| `[Q]` / `Ctrl+C` | Salir de la aplicación. |
+| Tecla            | Acción                                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `[C]`            | Crear una captura del estado actual del sistema (pide etiquetas).                                                   |
+| `[V]`            | Ver historial de capturas (filtro por etiqueta, detalle completo por ID, incluye Procesos/Usuarios de ese momento). |
+| `[E]`            | Editar las etiquetas de una captura (pide ID numérico + confirmación).                                              |
+| `[D]`            | Eliminar una captura (pide ID numérico + confirmación).                                                             |
+| `[P]`            | Ver la lista completa de procesos en vivo, con scroll.                                                              |
+| `[U]`            | Ver usuarios conectados en vivo, con scroll.                                                                        |
+| `[Q]` / `Ctrl+C` | Salir de la aplicación.                                                                                             |
 
 Dentro de las listas con scroll (`[P]`, `[U]`, y las listas capturadas dentro del detalle de una captura): `↑`/`↓` mueve una fila, `RePág`/`AvPág` una página, `Inicio`/`Fin` salta a los extremos.
 
@@ -180,17 +180,17 @@ Los campos de **ID** solo aceptan dígitos mientras se escriben. **Eliminar** y 
 
 Tabla única `capturas` en SQLite (`monitor.db`, en la raíz del proyecto, excluida de git):
 
-| Columna | Tipo | Descripción |
-|---|---|---|
-| `id` | INTEGER (PK, autoincremental) | Identificador de la captura. |
-| `fecha_hora` | TEXT | Marca de tiempo ISO de la captura. |
-| `cpu_uso` | REAL | % de uso de CPU en el momento de la captura. |
-| `ram_total`, `ram_usada` | INTEGER (KB) | Memoria RAM. |
-| `disco_total`, `disco_usada` | INTEGER (KB) | Espacio en disco (`/`). |
-| `red_trafico_in`, `red_trafico_out` | INTEGER (bytes) | Tráfico de red acumulado. |
-| `procesos_json` | TEXT | Snapshot completo de procesos (PID/nombre/estado/usuario) en formato JSON. |
-| `usuarios_json` | TEXT | Snapshot completo de usuarios conectados en formato JSON. |
-| `etiquetas` | TEXT | Etiquetas separadas por coma (por defecto `GENERAL`). |
+| Columna                             | Tipo                          | Descripción                                                                |
+| ----------------------------------- | ----------------------------- | -------------------------------------------------------------------------- |
+| `id`                                | INTEGER (PK, autoincremental) | Identificador de la captura.                                               |
+| `fecha_hora`                        | TEXT                          | Marca de tiempo ISO de la captura.                                         |
+| `cpu_uso`                           | REAL                          | % de uso de CPU en el momento de la captura.                               |
+| `ram_total`, `ram_usada`            | INTEGER (KB)                  | Memoria RAM.                                                               |
+| `disco_total`, `disco_usada`        | INTEGER (KB)                  | Espacio en disco (`/`).                                                    |
+| `red_trafico_in`, `red_trafico_out` | INTEGER (bytes)               | Tráfico de red acumulado.                                                  |
+| `procesos_json`                     | TEXT                          | Snapshot completo de procesos (PID/nombre/estado/usuario) en formato JSON. |
+| `usuarios_json`                     | TEXT                          | Snapshot completo de usuarios conectados en formato JSON.                  |
+| `etiquetas`                         | TEXT                          | Etiquetas separadas por coma (por defecto `GENERAL`).                      |
 
 El esquema se migra automáticamente (`ALTER TABLE ... ADD COLUMN`) si se abre una base de datos creada con una versión anterior del proyecto, sin perder datos existentes.
 
@@ -202,7 +202,7 @@ Resumen de las decisiones técnicas más importantes (detalle completo y justifi
 
 - **`os.fork()` acotado, no de toda la app**: el padre mantiene el control exclusivo de la TUI; el hijo solo ejecuta comandos pesados y termina con `os._exit()`. Evita corrupción de pantalla y problemas de `curses` con múltiples procesos sobre la misma terminal.
 - **`os.fork()` en un proceso multihilo**: el hijo solo clona el hilo que invoca el fork — los Hilos A/B no existen en el hijo, que nunca toca el estado compartido ni sus locks.
-- **% de CPU real vía `/proc/stat`**, no `/proc/loadavg` (que es *carga promedio*, no un porcentaje de uso).
+- **% de CPU real vía `/proc/stat`**, no `/proc/loadavg` (que es _carga promedio_, no un porcentaje de uso).
 - **Respaldo automático para `who`**: en sistemas con sesiones gestionadas por `systemd-logind` (Wayland, muchas distros modernas) `who` puede no reportar nada aunque haya un usuario conectado; se implementó una cadena de respaldo (`who` → `loginctl` → `w`).
 - **Manejo de errores exhaustivo**: ninguna función de lectura de `/proc` lanza excepciones (devuelve valores por defecto), los comandos externos tienen `timeout` estricto, las escrituras a SQLite reintentan ante bloqueos, y `os.fork()` fallido degrada a captura síncrona en vez de crashear.
 - **TUI responsiva**: el panel se adapta al tamaño real de la terminal en cada refresco; si no hay espacio, oculta secciones con un aviso en vez de romper el layout.
