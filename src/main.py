@@ -18,12 +18,14 @@ import os
 import signal
 import sys
 import threading
+from collections import deque
 
 from src.core import cmd_runner, proc_parser
 from src.database import db_manager
 
 INTERVALO_METRICAS = 1.0
 UMBRAL_PICO_RED_BYTES = 5 * 1024 * 1024  # 5 MB entre lecturas consecutivas
+HISTORIAL_MAXLEN = 20  # lecturas guardadas para sparklines/tendencia en la TUI
 
 evento_salida = threading.Event()
 
@@ -37,15 +39,28 @@ class EstadoMonitor:
         self.memoria: dict = {}
         self.alerta_red = False
         self.trafico_anterior: int | None = None
+        self.historial_cpu: deque[float] = deque(maxlen=HISTORIAL_MAXLEN)
+        self.historial_ram: deque[float] = deque(maxlen=HISTORIAL_MAXLEN)
 
     def actualizar_metricas(self, cpu: dict, memoria: dict) -> None:
         with self._lock:
             self.cpu = cpu
             self.memoria = memoria
 
+            ram_total = memoria.get("ram_total_kb", 0)
+            ram_usada = memoria.get("ram_usada_kb", 0)
+            porcentaje_ram = (ram_usada / ram_total * 100) if ram_total else 0.0
+
+            self.historial_cpu.append(cpu.get("uso_porcentaje", 0.0))
+            self.historial_ram.append(porcentaje_ram)
+
     def snapshot_metricas(self) -> tuple[dict, dict]:
         with self._lock:
             return dict(self.cpu), dict(self.memoria)
+
+    def snapshot_historial(self) -> tuple[list[float], list[float]]:
+        with self._lock:
+            return list(self.historial_cpu), list(self.historial_ram)
 
     def marcar_alerta_red(self, activa: bool) -> None:
         with self._lock:

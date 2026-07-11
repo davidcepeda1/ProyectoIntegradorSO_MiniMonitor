@@ -24,6 +24,30 @@ REFRESCO_MS = 1000
 COLOR_OK = 1
 COLOR_ALERTA = 2
 COLOR_TITULO = 3
+COLOR_ADVERTENCIA = 4
+
+BLOQUES_SPARKLINE = "▁▂▃▄▅▆▇█"
+ANCHO_SPARKLINE = 10
+
+# Umbrales de la "carita" de salud global: se evalúan sobre los mismos
+# porcentajes que ya colorean las barras (CPU/RAM/Disco) más la alerta de
+# red, combinados en un único semáforo de 3 niveles para dar una lectura
+# de un vistazo del estado general del sistema.
+CARAS_SALUD = {
+    "ok": "(^‿^)",
+    "alerta": "(o_o)",
+    "critico": "(x_x)",
+}
+MENSAJES_SALUD = {
+    "ok": "Todo tranquilo por aqui.",
+    "alerta": "Se esta calentando esto...",
+    "critico": "SOS: el sistema esta sufriendo.",
+}
+COLOR_POR_SALUD = {
+    "ok": COLOR_OK,
+    "alerta": COLOR_ADVERTENCIA,
+    "critico": COLOR_ALERTA,
+}
 
 # Dimensiones mínimas para intentar dibujar cualquier pantalla con cajas.
 # Por debajo de esto, en vez de arriesgarse a que curses lance
@@ -56,6 +80,7 @@ def _configurar_colores() -> None:
     curses.init_pair(COLOR_OK, curses.COLOR_GREEN, -1)
     curses.init_pair(COLOR_ALERTA, curses.COLOR_RED, -1)
     curses.init_pair(COLOR_TITULO, curses.COLOR_CYAN, -1)
+    curses.init_pair(COLOR_ADVERTENCIA, curses.COLOR_YELLOW, -1)
 
 
 def _escribir(stdscr, fila: int, columna: int, ancho: int, texto: str, atributo=0) -> None:
@@ -68,14 +93,21 @@ def _escribir(stdscr, fila: int, columna: int, ancho: int, texto: str, atributo=
         pass
 
 
-def _dibujar_caja(stdscr, fila0: int, ancho: int, alto_contenido: int, titulo: str) -> tuple[int, int]:
-    """Dibuja una caja con borde y título (estilo btop). Devuelve (fila_contenido, columna_contenido)."""
+def _dibujar_caja(stdscr, fila0: int, ancho: int, alto_contenido: int, titulo: str,
+                   color_borde: int = 0) -> tuple[int, int]:
+    """Dibuja una caja con borde y título (estilo btop). Devuelve (fila_contenido, columna_contenido).
+
+    `color_borde` (opcional) resalta el borde completo de la caja — no solo
+    los números — cuando esa sección está en alerta, para que el problema
+    se note incluso de reojo sin tener que leer los porcentajes.
+    """
     alto_caja = alto_contenido + 2
-    _escribir(stdscr, fila0, 0, ancho, "┌" + "─" * max(ancho - 2, 0) + "┐")
+    atributo = curses.color_pair(color_borde) if color_borde else 0
+    _escribir(stdscr, fila0, 0, ancho, "┌" + "─" * max(ancho - 2, 0) + "┐", atributo)
     for i in range(1, alto_caja - 1):
-        _escribir(stdscr, fila0 + i, 0, ancho, "│")
-        _escribir(stdscr, fila0 + i, ancho - 1, ancho, "│")
-    _escribir(stdscr, fila0 + alto_caja - 1, 0, ancho, "└" + "─" * max(ancho - 2, 0) + "┘")
+        _escribir(stdscr, fila0 + i, 0, ancho, "│", atributo)
+        _escribir(stdscr, fila0 + i, ancho - 1, ancho, "│", atributo)
+    _escribir(stdscr, fila0 + alto_caja - 1, 0, ancho, "└" + "─" * max(ancho - 2, 0) + "┘", atributo)
     _escribir(stdscr, fila0, 2, ancho, f"┤ {titulo} ├", curses.A_BOLD | curses.color_pair(COLOR_TITULO))
     return fila0 + 1, 2
 
@@ -89,6 +121,43 @@ def _dibujar_barra(stdscr, fila: int, columna: int, ancho_barra: int, porcentaje
     _escribir(stdscr, fila, columna + ancho_barra + 1, ancho_total, f"{porcentaje:5.1f}%")
 
 
+def _sparkline(valores: list[float], ancho: int = ANCHO_SPARKLINE) -> str:
+    """Mini-gráfico de barras con el historial reciente (0-100%) usando
+    caracteres de bloque Unicode, estilo btop."""
+    recientes = valores[-ancho:]
+    if not recientes:
+        return "░" * ancho
+    caracteres = []
+    for valor in recientes:
+        valor = max(0.0, min(valor, 100.0))
+        indice = int(valor / 100 * (len(BLOQUES_SPARKLINE) - 1))
+        caracteres.append(BLOQUES_SPARKLINE[indice])
+    return "".join(caracteres).rjust(ancho, "░")
+
+
+def _tendencia(valores: list[float]) -> str:
+    """Flecha de tendencia comparando la última lectura con la anterior.
+    Se usa un margen de 0.5 puntos para no parpadear con ruido de medición."""
+    if len(valores) < 2:
+        return " "
+    anterior, actual = valores[-2], valores[-1]
+    if actual > anterior + 0.5:
+        return "↑"
+    if actual < anterior - 0.5:
+        return "↓"
+    return "→"
+
+
+def _evaluar_salud(cpu_uso: float, porcentaje_ram: float, porcentaje_disco: float, alerta_red: bool) -> str:
+    """Semáforo de 3 niveles combinando los mismos umbrales que ya colorean
+    las barras individuales, para una lectura de "estado general" de un vistazo."""
+    if cpu_uso > 90 or porcentaje_ram > 90 or porcentaje_disco > 95 or alerta_red:
+        return "critico"
+    if cpu_uso > 75 or porcentaje_ram > 80 or porcentaje_disco > 85:
+        return "alerta"
+    return "ok"
+
+
 def _dibujar_panel(stdscr, estado: EstadoMonitor) -> None:
     if _terminal_muy_pequena(stdscr):
         return
@@ -96,13 +165,42 @@ def _dibujar_panel(stdscr, estado: EstadoMonitor) -> None:
     stdscr.erase()
     alto, ancho = stdscr.getmaxyx()
     cpu, memoria = estado.snapshot_metricas()
+    historial_cpu, historial_ram = estado.snapshot_historial()
 
     stdscr.addstr(0, 0, " MINI MONITOR DE RECURSOS ".center(ancho, "="),
                   curses.color_pair(COLOR_TITULO) | curses.A_BOLD)
 
     ancho_barra = max(min(ancho - 24, 40), 10)
     fila_menu = alto - 1
-    fila = 1
+
+    # Se calculan disco y red una sola vez aqui arriba (en vez de al llegar a
+    # sus respectivas cajas) porque la carita de salud global los necesita
+    # de entrada, antes de dibujar ninguna caja.
+    uso_cpu = cpu.get("uso_porcentaje", 0.0)
+    ram_total = memoria.get("ram_total_kb", 0)
+    ram_usada = memoria.get("ram_usada_kb", 0)
+    porcentaje_ram = (ram_usada / ram_total * 100) if ram_total else 0.0
+
+    try:
+        disco = cmd_runner.obtener_disco_principal()
+        porcentaje_disco = float(disco["porcentaje"].strip("%") or 0)
+        error_disco = None
+    except (RuntimeError, ValueError) as error:
+        disco = None
+        porcentaje_disco = 0.0
+        error_disco = str(error)
+
+    alerta_red = estado.hay_alerta_red()
+
+    # --- Fila de estado: carita reactiva + mensaje de humor + tag fijo ---
+    salud = _evaluar_salud(uso_cpu, porcentaje_ram, porcentaje_disco, alerta_red)
+    color_salud = COLOR_POR_SALUD[salud]
+    texto_estado = f"{CARAS_SALUD[salud]}  {MENSAJES_SALUD[salud]}"
+    _escribir(stdscr, 1, 2, ancho, texto_estado, curses.color_pair(color_salud) | curses.A_BOLD)
+    tag = "I <3 Linux"
+    _escribir(stdscr, 1, max(ancho - len(tag) - 2, 0), ancho, tag, curses.A_DIM)
+
+    fila = 2
     secciones_omitidas = 0
 
     def cabe(alto_contenido: int) -> bool:
@@ -114,12 +212,14 @@ def _dibujar_panel(stdscr, estado: EstadoMonitor) -> None:
 
     # --- CPU ---
     if cabe(3):
-        f, c = _dibujar_caja(stdscr, fila, ancho, 3, "cpu")
-        uso_cpu = cpu.get("uso_porcentaje", 0.0)
         color_cpu = COLOR_ALERTA if uso_cpu > 80 else COLOR_OK
+        f, c = _dibujar_caja(stdscr, fila, ancho, 3, "cpu",
+                              color_borde=COLOR_ALERTA if uso_cpu > 80 else 0)
         _escribir(stdscr, f, c, ancho, f"Nucleos: {cpu.get('nucleos', '?')}   "
                   f"Frecuencia: {cpu.get('frecuencia_mhz', '?')} MHz")
         _dibujar_barra(stdscr, f + 1, c, ancho_barra, uso_cpu, color_cpu, ancho)
+        _escribir(stdscr, f + 1, c + ancho_barra + 9, ancho,
+                  f"{_tendencia(historial_cpu)} {_sparkline(historial_cpu)}")
         _escribir(stdscr, f + 2, c, ancho, f"Carga (1/5/15 min): {cpu.get('carga_1min', '?')} / "
                   f"{cpu.get('carga_5min', '?')} / {cpu.get('carga_15min', '?')}")
         fila = f + 3 + 1
@@ -128,20 +228,20 @@ def _dibujar_panel(stdscr, estado: EstadoMonitor) -> None:
 
     # --- MEMORIA ---
     if cabe(4):
-        ram_total = memoria.get("ram_total_kb", 0)
-        ram_usada = memoria.get("ram_usada_kb", 0)
-        porcentaje_ram = (ram_usada / ram_total * 100) if ram_total else 0.0
         color_ram = COLOR_ALERTA if porcentaje_ram > 85 else COLOR_OK
         swap_total = memoria.get("swap_total_kb", 0)
         swap_usada = memoria.get("swap_usada_kb", 0)
         porcentaje_swap = (swap_usada / swap_total * 100) if swap_total else 0.0
+        color_swap = COLOR_ALERTA if porcentaje_swap > 85 else COLOR_OK
 
-        f, c = _dibujar_caja(stdscr, fila, ancho, 4, "mem")
+        f, c = _dibujar_caja(stdscr, fila, ancho, 4, "mem",
+                              color_borde=COLOR_ALERTA if (porcentaje_ram > 85 or porcentaje_swap > 85) else 0)
         _dibujar_barra(stdscr, f, c, ancho_barra, porcentaje_ram, color_ram, ancho)
-        _escribir(stdscr, f, c + ancho_barra + 10, ancho, "RAM")
+        _escribir(stdscr, f, c + ancho_barra + 9, ancho,
+                  f"{_tendencia(historial_ram)} {_sparkline(historial_ram)}  RAM")
         _escribir(stdscr, f + 1, c, ancho, f"Total: {ram_total} KB   Usada: {ram_usada} KB   "
                   f"Libre: {memoria.get('ram_libre_kb', '?')} KB")
-        _dibujar_barra(stdscr, f + 2, c, ancho_barra, porcentaje_swap, COLOR_OK, ancho)
+        _dibujar_barra(stdscr, f + 2, c, ancho_barra, porcentaje_swap, color_swap, ancho)
         _escribir(stdscr, f + 2, c + ancho_barra + 10, ancho, "SWAP")
         _escribir(stdscr, f + 3, c, ancho, f"Total: {swap_total} KB   Usada: {swap_usada} KB   "
                   f"Libre: {memoria.get('swap_libre_kb', '?')} KB")
@@ -151,22 +251,20 @@ def _dibujar_panel(stdscr, estado: EstadoMonitor) -> None:
 
     # --- DISCO ---
     if cabe(2):
-        f, c = _dibujar_caja(stdscr, fila, ancho, 2, "disco (/)")
-        try:
-            disco = cmd_runner.obtener_disco_principal()
-            porcentaje_disco = float(disco["porcentaje"].strip("%") or 0)
-            color_disco = COLOR_ALERTA if porcentaje_disco > 90 else COLOR_OK
+        color_disco = COLOR_ALERTA if porcentaje_disco > 90 else COLOR_OK
+        f, c = _dibujar_caja(stdscr, fila, ancho, 2, "disco (/)",
+                              color_borde=COLOR_ALERTA if porcentaje_disco > 90 else 0)
+        if error_disco:
+            _escribir(stdscr, f, c, ancho, f"Error: {error_disco}")
+        else:
             _dibujar_barra(stdscr, f, c, ancho_barra, porcentaje_disco, color_disco, ancho)
             _escribir(stdscr, f + 1, c, ancho, f"Total: {disco['total_kb']} KB   "
                       f"Usado: {disco['usado_kb']} KB   Libre: {disco['libre_kb']} KB")
-        except (RuntimeError, ValueError) as error:
-            _escribir(stdscr, f, c, ancho, f"Error: {error}")
         fila = f + 2 + 1
     else:
         secciones_omitidas += 1
 
     # --- RED ---
-    alerta_red = estado.hay_alerta_red()
     color_red = COLOR_ALERTA if alerta_red else COLOR_OK
     estado_red = "PICO DETECTADO" if alerta_red else "estable"
     try:
@@ -179,7 +277,8 @@ def _dibujar_panel(stdscr, estado: EstadoMonitor) -> None:
     alto_red_deseado = 1 + max(len(interfaces), 1)
     if cabe(1):
         alto_red = min(alto_red_deseado, fila_menu - fila - 2)
-        f, c = _dibujar_caja(stdscr, fila, ancho, alto_red, "red")
+        f, c = _dibujar_caja(stdscr, fila, ancho, alto_red, "red",
+                              color_borde=COLOR_ALERTA if alerta_red else 0)
         _escribir(stdscr, f, c, ancho, f"Estado: {estado_red}", curses.color_pair(color_red))
         if error_red:
             _escribir(stdscr, f + 1, c, ancho, f"Error: {error_red}")
