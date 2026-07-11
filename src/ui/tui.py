@@ -30,6 +30,10 @@ def _configurar_colores() -> None:
     curses.init_pair(COLOR_TITULO, curses.COLOR_CYAN, -1)
 
 
+def _escribir(stdscr, fila: int, columna: int, ancho: int, texto: str, atributo=0) -> None:
+    stdscr.addstr(fila, columna, texto[:max(ancho - columna - 1, 0)], atributo)
+
+
 def _dibujar_panel(stdscr, estado: EstadoMonitor) -> None:
     stdscr.erase()
     alto, ancho = stdscr.getmaxyx()
@@ -38,40 +42,55 @@ def _dibujar_panel(stdscr, estado: EstadoMonitor) -> None:
     stdscr.addstr(0, 0, " MINI MONITOR DE RECURSOS ".center(ancho, "="),
                   curses.color_pair(COLOR_TITULO) | curses.A_BOLD)
 
+    fila = 2
     uso_cpu = cpu.get("uso_porcentaje", 0.0)
     color_cpu = COLOR_ALERTA if uso_cpu > 80 else COLOR_OK
-    stdscr.addstr(2, 2, "CPU", curses.A_BOLD)
-    stdscr.addstr(3, 4, f"Nucleos: {cpu.get('nucleos', '?')}    "
-                        f"Frecuencia: {cpu.get('frecuencia_mhz', '?')} MHz")
-    stdscr.addstr(4, 4, f"Uso: {uso_cpu}%", curses.color_pair(color_cpu))
-    stdscr.addstr(5, 4, f"Carga (1/5/15 min): {cpu.get('carga_1min', '?')} / "
-                        f"{cpu.get('carga_5min', '?')} / {cpu.get('carga_15min', '?')}")
+    _escribir(stdscr, fila, 2, ancho, "CPU", curses.A_BOLD); fila += 1
+    _escribir(stdscr, fila, 4, ancho, f"Nucleos: {cpu.get('nucleos', '?')}    "
+              f"Frecuencia: {cpu.get('frecuencia_mhz', '?')} MHz"); fila += 1
+    _escribir(stdscr, fila, 4, ancho, f"Uso: {uso_cpu}%", curses.color_pair(color_cpu)); fila += 1
+    _escribir(stdscr, fila, 4, ancho, f"Carga (1/5/15 min): {cpu.get('carga_1min', '?')} / "
+              f"{cpu.get('carga_5min', '?')} / {cpu.get('carga_15min', '?')}"); fila += 2
 
     ram_total = memoria.get("ram_total_kb", 0)
     ram_usada = memoria.get("ram_usada_kb", 0)
     porcentaje_ram = (ram_usada / ram_total * 100) if ram_total else 0.0
     color_ram = COLOR_ALERTA if porcentaje_ram > 85 else COLOR_OK
-    stdscr.addstr(7, 2, "MEMORIA", curses.A_BOLD)
-    stdscr.addstr(8, 4, f"Total: {ram_total} KB   Usada: {ram_usada} KB "
-                        f"({porcentaje_ram:.1f}%)", curses.color_pair(color_ram))
-    stdscr.addstr(9, 4, f"Libre: {memoria.get('ram_libre_kb', '?')} KB   "
-                        f"Swap usada: {memoria.get('swap_usada_kb', '?')} KB")
+    _escribir(stdscr, fila, 2, ancho, "MEMORIA", curses.A_BOLD); fila += 1
+    _escribir(stdscr, fila, 4, ancho, f"Total: {ram_total} KB   Usada: {ram_usada} KB "
+              f"({porcentaje_ram:.1f}%)", curses.color_pair(color_ram)); fila += 1
+    _escribir(stdscr, fila, 4, ancho, f"Libre: {memoria.get('ram_libre_kb', '?')} KB"); fila += 1
+    _escribir(stdscr, fila, 4, ancho, f"Swap: {memoria.get('swap_usada_kb', '?')} / "
+              f"{memoria.get('swap_total_kb', '?')} KB usada   "
+              f"Libre: {memoria.get('swap_libre_kb', '?')} KB"); fila += 2
 
-    stdscr.addstr(11, 2, "DISCO (/)", curses.A_BOLD)
+    _escribir(stdscr, fila, 2, ancho, "DISCO (/)", curses.A_BOLD); fila += 1
     try:
         disco = cmd_runner.obtener_disco_principal()
-        stdscr.addstr(12, 4, f"Total: {disco['total_kb']} KB   "
-                             f"Usado: {disco['usado_kb']} KB ({disco['porcentaje']})")
+        _escribir(stdscr, fila, 4, ancho, f"Total: {disco['total_kb']} KB   "
+                  f"Usado: {disco['usado_kb']} KB ({disco['porcentaje']})   "
+                  f"Libre: {disco['libre_kb']} KB")
     except RuntimeError as error:
-        stdscr.addstr(12, 4, f"Error: {error}"[:ancho - 6])
+        _escribir(stdscr, fila, 4, ancho, f"Error: {error}")
+    fila += 2
 
     alerta_red = estado.hay_alerta_red()
     color_red = COLOR_ALERTA if alerta_red else COLOR_OK
     estado_red = "PICO DETECTADO" if alerta_red else "estable"
-    stdscr.addstr(14, 2, "RED", curses.A_BOLD)
-    stdscr.addstr(15, 4, f"Estado: {estado_red}", curses.color_pair(color_red))
+    _escribir(stdscr, fila, 2, ancho, "RED", curses.A_BOLD); fila += 1
+    _escribir(stdscr, fila, 4, ancho, f"Estado: {estado_red}", curses.color_pair(color_red)); fila += 1
+    try:
+        for interfaz in cmd_runner.obtener_red():
+            if fila >= alto - 2:
+                break
+            linea = (f"{interfaz['interfaz']:<10} {interfaz['ip']:<18} "
+                     f"RX: {interfaz['rx_bytes']:>12}  TX: {interfaz['tx_bytes']:>12}")
+            _escribir(stdscr, fila, 4, ancho, linea)
+            fila += 1
+    except RuntimeError as error:
+        _escribir(stdscr, fila, 4, ancho, f"Error: {error}")
 
-    menu = "[C] Crear  [V] Historial  [E] Editar etiquetas  [D] Eliminar  [Q] Salir"
+    menu = "[C]Crear [V]Historial [E]Editar [D]Eliminar [P]Procesos [U]Usuarios [Q]Salir"
     stdscr.addstr(alto - 1, 0, menu.center(ancho, " ")[:ancho - 1], curses.A_REVERSE)
 
     stdscr.noutrefresh()
@@ -166,11 +185,7 @@ def _mostrar_detalle_captura(stdscr, captura: dict) -> None:
         stdscr.addstr(fila, 2, f"{etiqueta:<14}: {valor}"[:ancho - 3])
 
     stdscr.refresh()
-    stdscr.nodelay(False)
-    stdscr.timeout(-1)
-    stdscr.getch()
-    stdscr.nodelay(True)
-    stdscr.timeout(REFRESCO_MS)
+    _esperar_tecla(stdscr)
 
 
 def _ver_historial(stdscr) -> None:
@@ -182,11 +197,7 @@ def _ver_historial(stdscr) -> None:
         _dibujar_tabla_historial(stdscr, capturas)
 
         if not capturas:
-            stdscr.nodelay(False)
-            stdscr.timeout(-1)
-            stdscr.getch()
-            stdscr.nodelay(True)
-            stdscr.timeout(REFRESCO_MS)
+            _esperar_tecla(stdscr)
             return
 
         id_texto = _leer_texto(stdscr, "ID para ver detalle (Enter para volver): ")
@@ -225,6 +236,63 @@ def _eliminar_registro(stdscr) -> None:
     _mostrar_mensaje(stdscr, "Captura eliminada." if exito else "No se encontro esa captura.")
 
 
+def _esperar_tecla(stdscr) -> None:
+    stdscr.nodelay(False)
+    stdscr.timeout(-1)
+    stdscr.getch()
+    stdscr.nodelay(True)
+    stdscr.timeout(REFRESCO_MS)
+
+
+def _ver_procesos(stdscr) -> None:
+    try:
+        procesos = cmd_runner.obtener_procesos()
+    except RuntimeError as error:
+        _mostrar_mensaje(stdscr, f"Error al listar procesos: {error}")
+        return
+
+    stdscr.erase()
+    alto, ancho = stdscr.getmaxyx()
+    stdscr.addstr(0, 0, " PROCESOS (cualquier tecla para volver) ".center(ancho, "="), curses.A_BOLD)
+
+    encabezado = f"{'PID':<8}{'NOMBRE':<22}{'ESTADO':<8}{'USUARIO':<15}"
+    _escribir(stdscr, 2, 2, ancho, encabezado, curses.A_UNDERLINE)
+
+    visibles = max(alto - 6, 0)
+    for fila, proceso in enumerate(procesos[:visibles], start=3):
+        linea = f"{proceso['pid']:<8}{proceso['nombre']:<22}{proceso['estado']:<8}{proceso['usuario']:<15}"
+        _escribir(stdscr, fila, 2, ancho, linea)
+
+    _escribir(stdscr, alto - 2, 2, ancho,
+              f"Mostrando {min(len(procesos), visibles)} de {len(procesos)} procesos.")
+    stdscr.refresh()
+    _esperar_tecla(stdscr)
+
+
+def _ver_usuarios(stdscr) -> None:
+    try:
+        usuarios = cmd_runner.obtener_usuarios()
+    except RuntimeError as error:
+        _mostrar_mensaje(stdscr, f"Error al listar usuarios: {error}")
+        return
+
+    stdscr.erase()
+    alto, ancho = stdscr.getmaxyx()
+    stdscr.addstr(0, 0, " USUARIOS CONECTADOS (cualquier tecla para volver) ".center(ancho, "="), curses.A_BOLD)
+
+    if not usuarios:
+        _escribir(stdscr, 2, 2, ancho, "No hay usuarios con sesion registrada por 'who'.")
+    else:
+        encabezado = f"{'USUARIO':<15}{'TERMINAL':<12}{'TIEMPO DE CONEXION':<20}"
+        _escribir(stdscr, 2, 2, ancho, encabezado, curses.A_UNDERLINE)
+        for fila, usuario in enumerate(usuarios[:alto - 5], start=3):
+            linea = f"{usuario['usuario']:<15}{usuario['terminal']:<12}{usuario['tiempo_conexion']:<20}"
+            _escribir(stdscr, fila, 2, ancho, linea)
+
+    stdscr.refresh()
+    _esperar_tecla(stdscr)
+
+
 def _bucle_principal(stdscr, estado: EstadoMonitor) -> None:
     curses.curs_set(0)
     _configurar_colores()
@@ -245,6 +313,10 @@ def _bucle_principal(stdscr, estado: EstadoMonitor) -> None:
             _editar_etiquetas(stdscr)
         elif tecla in (ord("d"), ord("D")):
             _eliminar_registro(stdscr)
+        elif tecla in (ord("p"), ord("P")):
+            _ver_procesos(stdscr)
+        elif tecla in (ord("u"), ord("U")):
+            _ver_usuarios(stdscr)
 
 
 def iniciar_tui(estado: EstadoMonitor) -> None:
