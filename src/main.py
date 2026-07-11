@@ -86,7 +86,19 @@ def hilo_red(estado: EstadoMonitor) -> None:
 
 
 def _proceso_hijo_captura(fd_escritura: int) -> None:
-    """Cuerpo del proceso hijo: ejecuta los comandos pesados y envía el resultado por el pipe."""
+    """Cuerpo del proceso hijo: ejecuta los comandos pesados y envía el resultado por el pipe.
+
+    Se atrapa `Exception` de forma amplia a propósito: el hijo es un
+    callejón sin salida tras el fork, y NUNCA debe dejar una excepción sin
+    manejar — si escapara, el intérprete intentaría desenredar la pila de
+    llamadas del proceso hijo (que es una copia de la del padre, incluida
+    potencialmente la TUI de curses), con resultados impredecibles sobre
+    una terminal que en realidad controla el padre. Se informa el error al
+    padre por el pipe y se termina siempre con `os._exit()` (nunca con un
+    `return` normal), para no arriesgarse a que el hijo continúe
+    ejecutando por accidente código pensado solo para el padre.
+    """
+    codigo_salida = 0
     with os.fdopen(fd_escritura, "w") as pipe_escritura:
         try:
             datos = {
@@ -96,28 +108,67 @@ def _proceso_hijo_captura(fd_escritura: int) -> None:
                 "trafico": cmd_runner.obtener_trafico_total(),
             }
             pipe_escritura.write(json.dumps(datos))
-        except RuntimeError as error:
+        except Exception as error:
             pipe_escritura.write(json.dumps({"error": str(error)}))
-    os._exit(0)
+            codigo_salida = 1
+    os._exit(codigo_salida)
 
 
-def realizar_captura(estado: EstadoMonitor, etiquetas: list[str] | None = None) -> int:
+def _persistir_captura(estado: EstadoMonitor, datos: dict, etiquetas: list[str] | None) -> int:
+    """Combina los datos pesados (disco/procesos/usuarios/trafico) con las
+    métricas de CPU/RAM ya calculadas por el Hilo A, y guarda la captura."""
+    cpu, memoria = estado.snapshot_metricas()
+    disco = datos["disco"]
+    trafico = datos["trafico"]
+
+    return db_manager.crear_captura(
+        cpu_uso=cpu.get("uso_porcentaje", 0.0),
+        ram_total=memoria.get("ram_total_kb", 0),
+        ram_usada=memoria.get("ram_usada_kb", 0),
+        disco_total=disco.get("total_kb", 0),
+        disco_usada=disco.get("usado_kb", 0),
+        red_trafico_in=trafico.get("red_trafico_in", 0),
+        red_trafico_out=trafico.get("red_trafico_out", 0),
+        procesos=datos["procesos"],
+        usuarios=datos["usuarios"],
+        etiquetas=etiquetas,
+    )
+
+
+def realizar_captura(estado: EstadoMonitor, etiquetas: list[str] | None = None) -> tuple[int, str | None]:
     """Crea una captura completa del estado del sistema (los 6 módulos) y la
-    persiste en la BD.
+    persiste en la BD. Devuelve `(id_captura, advertencia)`.
 
     El proceso hijo (os.fork()) ejecuta los comandos pesados (df, ps, who) y
     devuelve el resultado al padre mediante os.pipe(); el padre combina ese
     resultado con las métricas de CPU/RAM ya calculadas por el Hilo A y
     guarda la captura completa (CPU, RAM, Disco, Red, Procesos y Usuarios)
     en SQLite.
+
+    Si `os.fork()` falla (ej. se alcanzó el límite de procesos del usuario,
+    `RLIMIT_NPROC`, o el sistema se quedó sin PIDs disponibles) se captura
+    el `OSError` y se degrada a un modo de respaldo síncrono: los mismos
+    comandos se ejecutan directamente en el proceso principal en vez de
+    delegarlos a un hijo. `advertencia` es `None` en el caso normal, o un
+    mensaje describiendo la degradación para que la TUI lo muestre.
     """
-    fd_lectura, fd_escritura = os.pipe()
-    pid_hijo = os.fork()
+    try:
+        fd_lectura, fd_escritura = os.pipe()
+        pid_hijo = os.fork()
+    except OSError as error:
+        advertencia = f"os.fork() falló ({error}); captura realizada de forma síncrona."
+        datos = {
+            "disco": cmd_runner.obtener_disco_principal(),
+            "procesos": cmd_runner.obtener_procesos(),
+            "usuarios": cmd_runner.obtener_usuarios(),
+            "trafico": cmd_runner.obtener_trafico_total(),
+        }
+        return _persistir_captura(estado, datos, etiquetas), advertencia
 
     if pid_hijo == 0:
         os.close(fd_lectura)
         _proceso_hijo_captura(fd_escritura)
-        return -1  # inalcanzable: el hijo termina en os._exit()
+        return -1, None  # inalcanzable: el hijo termina en os._exit()
 
     os.close(fd_escritura)
     with os.fdopen(fd_lectura, "r") as pipe_lectura:
@@ -128,22 +179,7 @@ def realizar_captura(estado: EstadoMonitor, etiquetas: list[str] | None = None) 
     if "error" in datos_hijo:
         raise RuntimeError(f"El proceso hijo de captura falló: {datos_hijo['error']}")
 
-    cpu, memoria = estado.snapshot_metricas()
-    disco = datos_hijo["disco"]
-    trafico = datos_hijo["trafico"]
-
-    return db_manager.crear_captura(
-        cpu_uso=cpu.get("uso_porcentaje", 0.0),
-        ram_total=memoria.get("ram_total_kb", 0),
-        ram_usada=memoria.get("ram_usada_kb", 0),
-        disco_total=disco.get("total_kb", 0),
-        disco_usada=disco.get("usado_kb", 0),
-        red_trafico_in=trafico.get("red_trafico_in", 0),
-        red_trafico_out=trafico.get("red_trafico_out", 0),
-        procesos=datos_hijo["procesos"],
-        usuarios=datos_hijo["usuarios"],
-        etiquetas=etiquetas,
-    )
+    return _persistir_captura(estado, datos_hijo, etiquetas), None
 
 
 def _manejar_sigint(signum, frame) -> None:

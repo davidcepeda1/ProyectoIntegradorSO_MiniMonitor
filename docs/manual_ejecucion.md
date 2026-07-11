@@ -15,8 +15,8 @@ para no saturarlo) con las teclas `[P]` y `[U]`.
 
 - `[C]` Crear captura del estado actual del sistema.
 - `[V]` Visualizar historial de capturas almacenadas (permite ver el detalle completo de una captura por su ID).
-- `[E]` Editar etiquetas de un registro del historial.
-- `[D]` Eliminar un registro del historial.
+- `[E]` Editar etiquetas de un registro del historial (pide confirmación antes de aplicar el cambio).
+- `[D]` Eliminar un registro del historial (pide confirmación antes de borrar).
 - `[P]` Ver lista de procesos (PID, nombre, estado, usuario), con scroll.
 - `[U]` Ver usuarios conectados y tiempo de conexión, con scroll.
 - `[Q]` o `Ctrl+C` Salir de la aplicación.
@@ -27,3 +27,12 @@ página completa, `Inicio`/`Fin` salta al principio/final de la lista, y una
 barra de desplazamiento vertical en el borde derecho indica la posición
 actual dentro del total (estilo btop). `[Q]` o `Enter` regresa al panel
 principal.
+
+## Entrada de datos en los formularios
+
+- Los campos que piden un **ID** (ver detalle en `[V]`, `[E]`, `[D]`) solo
+  aceptan dígitos mientras se escribe: cualquier otra tecla se ignora, no
+  hace falta borrarla.
+- **`[D]` Eliminar** y **`[E]` Editar** siempre muestran una confirmación de
+  una sola tecla antes de aplicar el cambio: `S` confirma, cualquier otra
+  tecla (incluido `Enter`) cancela la operación sin hacer nada.

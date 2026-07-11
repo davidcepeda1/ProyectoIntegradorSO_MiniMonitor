@@ -13,6 +13,7 @@ estado compartido en segundo plano y nunca tocan la terminal.
 
 import curses
 import json
+import re
 
 from src.core import cmd_runner
 from src.database import db_manager
@@ -23,6 +24,30 @@ REFRESCO_MS = 1000
 COLOR_OK = 1
 COLOR_ALERTA = 2
 COLOR_TITULO = 3
+
+# Dimensiones mínimas para intentar dibujar cualquier pantalla con cajas.
+# Por debajo de esto, en vez de arriesgarse a que curses lance
+# curses.error al tratar de escribir fuera de los límites de la ventana,
+# se muestra un aviso simple y se omite el dibujo normal.
+MINIMO_ALTO = 6
+MINIMO_ANCHO = 20
+
+
+def _terminal_muy_pequena(stdscr) -> bool:
+    """Si la terminal no alcanza el tamaño mínimo, muestra un aviso seguro
+    y devuelve True para que el llamador omita su dibujo normal."""
+    alto, ancho = stdscr.getmaxyx()
+    if alto >= MINIMO_ALTO and ancho >= MINIMO_ANCHO:
+        return False
+    mensaje = "Terminal muy pequeña para mostrar esta pantalla. Agranda la ventana."
+    try:
+        stdscr.erase()
+        stdscr.addstr(0, 0, mensaje[:max(ancho - 1, 0)])
+        stdscr.noutrefresh()
+        curses.doupdate()
+    except curses.error:
+        pass
+    return True
 
 
 def _configurar_colores() -> None:
@@ -65,6 +90,9 @@ def _dibujar_barra(stdscr, fila: int, columna: int, ancho_barra: int, porcentaje
 
 
 def _dibujar_panel(stdscr, estado: EstadoMonitor) -> None:
+    if _terminal_muy_pequena(stdscr):
+        return
+
     stdscr.erase()
     alto, ancho = stdscr.getmaxyx()
     cpu, memoria = estado.snapshot_metricas()
@@ -198,6 +226,79 @@ def _leer_texto(stdscr, prompt: str) -> str:
     return texto
 
 
+def _leer_numero(stdscr, prompt: str, max_digitos: int = 10) -> str:
+    """Como `_leer_texto`, pero filtra cada tecla al vuelo: solo los dígitos
+    0-9 se insertan, cualquier otra tecla se ignora silenciosamente (no se
+    imprime ni se acepta). Así el usuario no puede llegar a escribir un ID
+    inválido, en vez de dejarlo escribir cualquier cosa y validar después.
+
+    Devuelve una cadena de solo dígitos (posiblemente vacía si se cancela
+    con Enter sin escribir nada, o con Esc).
+    """
+    alto, ancho = stdscr.getmaxyx()
+    fila = alto - 2
+    columna_inicio = min(len(prompt), max(ancho - 2, 0))
+
+    def redibujar(digitos: str) -> None:
+        _escribir(stdscr, fila, 0, ancho, " " * max(ancho - 1, 0))
+        _escribir(stdscr, fila, 0, ancho, prompt)
+        _escribir(stdscr, fila, columna_inicio, ancho, digitos)
+
+    redibujar("")
+    stdscr.refresh()
+
+    stdscr.nodelay(False)
+    stdscr.timeout(-1)
+    stdscr.keypad(True)
+    curses.curs_set(1)
+
+    digitos = ""
+    try:
+        while True:
+            tecla = stdscr.getch()
+
+            if tecla in (10, 13):  # Enter: confirma lo escrito hasta ahora
+                break
+            if tecla == 27:  # Esc: cancela, se comporta como si no se hubiera escrito nada
+                digitos = ""
+                break
+            if tecla in (curses.KEY_BACKSPACE, 127, 8):
+                digitos = digitos[:-1]
+                redibujar(digitos)
+                continue
+            if 0 <= tecla < 256 and chr(tecla).isdigit() and len(digitos) < max_digitos:
+                digitos += chr(tecla)
+                redibujar(digitos)
+            # cualquier otra tecla (letras, símbolos, flechas, etc.) se ignora por completo
+    finally:
+        curses.curs_set(0)
+        stdscr.nodelay(True)
+        stdscr.timeout(REFRESCO_MS)
+
+    return digitos
+
+
+def _confirmar(stdscr, mensaje: str) -> bool:
+    """Confirmación de una sola tecla: 'S' confirma, cualquier otra tecla
+    cancela. El valor por defecto ante Enter/Esc/cualquier tecla ambigua es
+    NO, para que una operación destructiva (eliminar) nunca ocurra por
+    accidente al presionar la tecla equivocada."""
+    alto, ancho = stdscr.getmaxyx()
+    fila = alto - 2
+    texto = f"{mensaje} [S = si / cualquier tecla = no]: "
+    _escribir(stdscr, fila, 0, ancho, " " * max(ancho - 1, 0))
+    _escribir(stdscr, fila, 0, ancho, texto, curses.A_BOLD)
+    stdscr.refresh()
+
+    stdscr.nodelay(False)
+    stdscr.timeout(-1)
+    tecla = stdscr.getch()
+    stdscr.nodelay(True)
+    stdscr.timeout(REFRESCO_MS)
+
+    return tecla in (ord("s"), ord("S"))
+
+
 def _esperar_tecla(stdscr) -> None:
     stdscr.nodelay(False)
     stdscr.timeout(-1)
@@ -219,20 +320,39 @@ def _mostrar_mensaje(stdscr, mensaje: str) -> None:
 
 
 def _parsear_etiquetas(texto: str) -> list[str] | None:
-    etiquetas = [etiqueta.strip() for etiqueta in texto.split(",") if etiqueta.strip()]
+    """Divide por comas y sanitiza cada etiqueta: solo se conservan letras
+    (incluye acentos/ñ vía \\w unicode), números, espacios y guiones.
+
+    No es una defensa contra inyección SQL — toda la capa de datos ya usa
+    consultas parametrizadas (`?`), así que eso está cubierto de raíz. La
+    razón real es de integridad de datos: las etiquetas se guardan como
+    "tag1, tag2" separadas por coma; una etiqueta que contuviera una coma
+    (o caracteres de control) corrompería ese formato al volver a leerlo.
+    """
+    etiquetas = []
+    for cruda in texto.split(","):
+        limpia = re.sub(r"[^\w\s-]", "", cruda, flags=re.UNICODE).strip()
+        if limpia:
+            etiquetas.append(limpia)
     return etiquetas or None
 
 
 def _crear_captura(stdscr, estado: EstadoMonitor) -> None:
     texto = _leer_texto(stdscr, "Etiquetas separadas por coma (Enter = GENERAL): ")
     try:
-        captura_id = realizar_captura(estado, etiquetas=_parsear_etiquetas(texto))
-        _mostrar_mensaje(stdscr, f"Captura #{captura_id} guardada correctamente.")
+        captura_id, advertencia = realizar_captura(estado, etiquetas=_parsear_etiquetas(texto))
+        mensaje = f"Captura #{captura_id} guardada correctamente."
+        if advertencia:
+            mensaje += f"  [Aviso: {advertencia}]"
+        _mostrar_mensaje(stdscr, mensaje)
     except RuntimeError as error:
         _mostrar_mensaje(stdscr, f"Error al capturar: {error}")
 
 
 def _dibujar_tabla_historial(stdscr, capturas: list[dict]) -> None:
+    if _terminal_muy_pequena(stdscr):
+        return
+
     stdscr.erase()
     alto, ancho = stdscr.getmaxyx()
     alto_contenido = max(alto - 3, 1)
@@ -276,6 +396,16 @@ def _mostrar_detalle_captura(stdscr, captura: dict) -> None:
     usuarios = json.loads(captura.get("usuarios_json") or "[]")
 
     while True:
+        if _terminal_muy_pequena(stdscr):
+            stdscr.nodelay(False)
+            stdscr.timeout(-1)
+            tecla = stdscr.getch()
+            stdscr.nodelay(True)
+            stdscr.timeout(REFRESCO_MS)
+            if tecla in (ord("q"), ord("Q"), 27, 10, 13):
+                return
+            continue  # cualquier otra tecla: reintenta por si la terminal ya se agrando
+
         stdscr.erase()
         alto, ancho = stdscr.getmaxyx()
         alto_contenido = max(alto - 3, 1)
@@ -350,12 +480,9 @@ def _ver_historial(stdscr) -> None:
             _esperar_tecla(stdscr)
             return
 
-        id_texto = _leer_texto(stdscr, "ID para ver detalle (Enter para volver): ")
+        id_texto = _leer_numero(stdscr, "ID para ver detalle (Enter para volver): ")
         if not id_texto:
             return
-        if not id_texto.isdigit():
-            _mostrar_mensaje(stdscr, "ID invalido.")
-            continue
 
         captura = next((c for c in capturas if c["id"] == int(id_texto)), None)
         if captura is None:
@@ -366,23 +493,34 @@ def _ver_historial(stdscr) -> None:
 
 
 def _editar_etiquetas(stdscr) -> None:
-    id_texto = _leer_texto(stdscr, "ID de la captura a editar: ")
-    if not id_texto.isdigit():
-        _mostrar_mensaje(stdscr, "ID invalido.")
+    id_texto = _leer_numero(stdscr, "ID de la captura a editar: ")
+    if not id_texto:
         return
+    captura_id = int(id_texto)
 
     etiquetas_texto = _leer_texto(stdscr, "Nuevas etiquetas separadas por coma: ")
-    exito = db_manager.actualizar_etiquetas(int(id_texto), _parsear_etiquetas(etiquetas_texto))
+    nuevas_etiquetas = _parsear_etiquetas(etiquetas_texto)
+    resumen = ", ".join(nuevas_etiquetas) if nuevas_etiquetas else "GENERAL"
+
+    if not _confirmar(stdscr, f"¿Cambiar etiquetas de la captura #{captura_id} a [{resumen}]?"):
+        _mostrar_mensaje(stdscr, "Edicion cancelada.")
+        return
+
+    exito = db_manager.actualizar_etiquetas(captura_id, nuevas_etiquetas)
     _mostrar_mensaje(stdscr, "Etiquetas actualizadas." if exito else "No se encontro esa captura.")
 
 
 def _eliminar_registro(stdscr) -> None:
-    id_texto = _leer_texto(stdscr, "ID de la captura a eliminar: ")
-    if not id_texto.isdigit():
-        _mostrar_mensaje(stdscr, "ID invalido.")
+    id_texto = _leer_numero(stdscr, "ID de la captura a eliminar: ")
+    if not id_texto:
+        return
+    captura_id = int(id_texto)
+
+    if not _confirmar(stdscr, f"¿ELIMINAR la captura #{captura_id}? Esta accion no se puede deshacer."):
+        _mostrar_mensaje(stdscr, "Eliminacion cancelada.")
         return
 
-    exito = db_manager.eliminar_captura(int(id_texto))
+    exito = db_manager.eliminar_captura(captura_id)
     _mostrar_mensaje(stdscr, "Captura eliminada." if exito else "No se encontro esa captura.")
 
 
@@ -403,6 +541,12 @@ def _vista_lista_desplazable(stdscr, titulo: str, encabezado: str, obtener_filas
     stdscr.keypad(True)
     try:
         while True:
+            if _terminal_muy_pequena(stdscr):
+                tecla = stdscr.getch()
+                if tecla in (ord("q"), ord("Q"), 27, 10, 13):
+                    return
+                continue  # cualquier otra tecla: reintenta por si la terminal ya se agrando
+
             filas_texto = obtener_filas()
             alto, ancho = stdscr.getmaxyx()
 

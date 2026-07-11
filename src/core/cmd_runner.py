@@ -11,18 +11,28 @@ import subprocess
 from datetime import datetime
 
 FS_PSEUDO = {"tmpfs", "devtmpfs", "overlay", "squashfs", "efivarfs", "proc", "sysfs"}
+TIMEOUT_COMANDO_SEG = 2
 
 
-def _ejecutar(comando: list[str]) -> str:
+def _ejecutar(comando: list[str], timeout: float = TIMEOUT_COMANDO_SEG) -> str:
+    """Ejecuta un comando externo con timeout estricto.
+
+    Sin `timeout`, un comando colgado (ej. un `df` esperando un punto de
+    montaje de red caído) bloquearía indefinidamente al hilo/proceso que lo
+    invoca. `subprocess.TimeoutExpired` es subclase de `SubprocessError`,
+    igual que `CalledProcessError`, por lo que un solo `except` cubre ambos
+    casos (comando que falla y comando que se cuelga).
+    """
     try:
         resultado = subprocess.run(
             comando,
             capture_output=True,
             text=True,
             check=True,
+            timeout=timeout,
         )
         return resultado.stdout
-    except (subprocess.CalledProcessError, FileNotFoundError, OSError) as error:
+    except (subprocess.SubprocessError, FileNotFoundError, OSError) as error:
         raise RuntimeError(f"Fallo al ejecutar {' '.join(comando)}: {error}") from error
 
 
@@ -39,15 +49,18 @@ def obtener_disco() -> list[dict]:
         origen, tipo_fs, total, usado, libre, porcentaje, punto_montaje = partes[0], partes[1], *partes[2:]
         if tipo_fs in FS_PSEUDO:
             continue
-        discos.append({
-            "origen": origen,
-            "tipo_fs": tipo_fs,
-            "total_kb": int(total),
-            "usado_kb": int(usado),
-            "libre_kb": int(libre),
-            "porcentaje": porcentaje,
-            "punto_montaje": punto_montaje,
-        })
+        try:
+            discos.append({
+                "origen": origen,
+                "tipo_fs": tipo_fs,
+                "total_kb": int(total),
+                "usado_kb": int(usado),
+                "libre_kb": int(libre),
+                "porcentaje": porcentaje,
+                "punto_montaje": punto_montaje,
+            })
+        except ValueError:
+            continue  # fila con columnas numericas corruptas: se omite, no se aborta el listado completo
     return discos
 
 
@@ -69,12 +82,15 @@ def obtener_procesos() -> list[dict]:
         if len(partes) < 4:
             continue
         pid, nombre, estado, usuario = partes
-        procesos.append({
-            "pid": int(pid),
-            "nombre": nombre,
-            "estado": estado,
-            "usuario": usuario,
-        })
+        try:
+            procesos.append({
+                "pid": int(pid),
+                "nombre": nombre,
+                "estado": estado,
+                "usuario": usuario,
+            })
+        except ValueError:
+            continue  # pid no numerico (linea corrupta de `ps`): se omite
     return procesos
 
 
@@ -216,15 +232,20 @@ def obtener_trafico_red() -> dict:
 
     trafico = {}
     for linea in lineas:
-        interfaz, _, resto = linea.partition(":")
+        interfaz, separador, resto = linea.partition(":")
+        if not separador:
+            continue
         interfaz = interfaz.strip()
         campos = resto.split()
         if len(campos) < 9:
             continue
-        trafico[interfaz] = {
-            "rx_bytes": int(campos[0]),
-            "tx_bytes": int(campos[8]),
-        }
+        try:
+            trafico[interfaz] = {
+                "rx_bytes": int(campos[0]),
+                "tx_bytes": int(campos[8]),
+            }
+        except ValueError:
+            continue  # contador no numerico (linea corrupta de /proc/net/dev): se omite
     return trafico
 
 
