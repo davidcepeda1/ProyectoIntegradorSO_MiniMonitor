@@ -1,5 +1,6 @@
 """Gestión de la base de datos SQLite del Mini Monitor de Recursos."""
 
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -17,9 +18,19 @@ CREATE TABLE IF NOT EXISTS capturas (
     disco_usada INTEGER,
     red_trafico_in INTEGER,
     red_trafico_out INTEGER,
+    procesos_json TEXT NOT NULL DEFAULT '[]',
+    usuarios_json TEXT NOT NULL DEFAULT '[]',
     etiquetas TEXT NOT NULL
 );
 """
+
+# Columnas agregadas despues de la version inicial del esquema. Se aplican
+# con ALTER TABLE para que una base de datos ya existente (creada antes de
+# que se guardaran Procesos/Usuarios) se actualice sola sin perder datos.
+COLUMNAS_MIGRACION = {
+    "procesos_json": "TEXT NOT NULL DEFAULT '[]'",
+    "usuarios_json": "TEXT NOT NULL DEFAULT '[]'",
+}
 
 
 def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
@@ -31,6 +42,11 @@ def get_connection(db_path: Path = DB_PATH) -> sqlite3.Connection:
 def init_db(db_path: Path = DB_PATH) -> None:
     with get_connection(db_path) as conn:
         conn.execute(SCHEMA)
+        for columna, definicion in COLUMNAS_MIGRACION.items():
+            try:
+                conn.execute(f"ALTER TABLE capturas ADD COLUMN {columna} {definicion}")
+            except sqlite3.OperationalError:
+                pass  # la columna ya existe (base de datos creada con un esquema mas reciente)
 
 
 def _etiquetas_a_texto(etiquetas: list[str] | None) -> str:
@@ -47,19 +63,24 @@ def crear_captura(
     disco_usada: int,
     red_trafico_in: int,
     red_trafico_out: int,
+    procesos: list[dict] | None = None,
+    usuarios: list[dict] | None = None,
     etiquetas: list[str] | None = None,
     db_path: Path = DB_PATH,
 ) -> int:
     fecha_hora = datetime.now().isoformat(timespec="seconds")
     etiquetas_texto = _etiquetas_a_texto(etiquetas)
+    procesos_texto = json.dumps(procesos or [])
+    usuarios_texto = json.dumps(usuarios or [])
 
     with get_connection(db_path) as conn:
         cursor = conn.execute(
             """
             INSERT INTO capturas (
                 fecha_hora, cpu_uso, ram_total, ram_usada,
-                disco_total, disco_usada, red_trafico_in, red_trafico_out, etiquetas
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                disco_total, disco_usada, red_trafico_in, red_trafico_out,
+                procesos_json, usuarios_json, etiquetas
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 fecha_hora,
@@ -70,6 +91,8 @@ def crear_captura(
                 disco_usada,
                 red_trafico_in,
                 red_trafico_out,
+                procesos_texto,
+                usuarios_texto,
                 etiquetas_texto,
             ),
         )

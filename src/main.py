@@ -91,6 +91,7 @@ def _proceso_hijo_captura(fd_escritura: int) -> None:
         try:
             datos = {
                 "disco": cmd_runner.obtener_disco_principal(),
+                "procesos": cmd_runner.obtener_procesos(),
                 "usuarios": cmd_runner.obtener_usuarios(),
                 "trafico": cmd_runner.obtener_trafico_total(),
             }
@@ -101,12 +102,14 @@ def _proceso_hijo_captura(fd_escritura: int) -> None:
 
 
 def realizar_captura(estado: EstadoMonitor, etiquetas: list[str] | None = None) -> int:
-    """Crea una captura completa del estado del sistema y la persiste en la BD.
+    """Crea una captura completa del estado del sistema (los 6 módulos) y la
+    persiste en la BD.
 
-    El proceso hijo (os.fork()) ejecuta los comandos pesados (df, who) y
-    devuelve el resultado al padre mediante os.pipe(); el padre combina
-    ese resultado con las métricas de CPU/RAM ya calculadas por el Hilo A
-    y guarda la captura en SQLite.
+    El proceso hijo (os.fork()) ejecuta los comandos pesados (df, ps, who) y
+    devuelve el resultado al padre mediante os.pipe(); el padre combina ese
+    resultado con las métricas de CPU/RAM ya calculadas por el Hilo A y
+    guarda la captura completa (CPU, RAM, Disco, Red, Procesos y Usuarios)
+    en SQLite.
     """
     fd_lectura, fd_escritura = os.pipe()
     pid_hijo = os.fork()
@@ -137,6 +140,8 @@ def realizar_captura(estado: EstadoMonitor, etiquetas: list[str] | None = None) 
         disco_usada=disco.get("usado_kb", 0),
         red_trafico_in=trafico.get("red_trafico_in", 0),
         red_trafico_out=trafico.get("red_trafico_out", 0),
+        procesos=datos_hijo["procesos"],
+        usuarios=datos_hijo["usuarios"],
         etiquetas=etiquetas,
     )
 

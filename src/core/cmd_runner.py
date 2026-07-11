@@ -78,9 +78,19 @@ def obtener_procesos() -> list[dict]:
     return procesos
 
 
-def obtener_usuarios() -> list[dict]:
-    """Usuarios conectados y tiempo de conexión (calculado), vía `who`."""
-    salida = _ejecutar(["who"])
+def _usuarios_via_who() -> list[dict]:
+    """Usuarios conectados y tiempo de conexión (calculado), vía `who`.
+
+    `who` depende de /run/utmp, una base de datos de sesiones de login que
+    solo actualizan programas como login/getty/sshd. En sistemas con
+    sesiones gestionadas por systemd-logind (Wayland, muchas distros
+    modernas) puede legítimamente no reportar nada aunque haya un usuario
+    con sesión activa.
+    """
+    try:
+        salida = _ejecutar(["who"])
+    except RuntimeError:
+        return []
 
     usuarios = []
     ahora = datetime.now()
@@ -107,6 +117,77 @@ def obtener_usuarios() -> list[dict]:
             "tiempo_conexion": tiempo_conexion,
         })
     return usuarios
+
+
+def _usuarios_via_loginctl() -> list[dict]:
+    """Respaldo para `who`: sesiones reportadas por systemd-logind.
+
+    Se usa cuando `who` no encuentra nada porque la sesión activa nunca se
+    registró en el utmp clásico (caso típico en Wayland). Se descartan las
+    sesiones clase "manager" (procesos internos de systemd, no logins).
+    """
+    try:
+        salida = _ejecutar(["loginctl", "list-sessions", "--no-legend"])
+    except RuntimeError:
+        return []
+
+    usuarios = []
+    for linea in salida.strip().splitlines():
+        partes = linea.split()
+        if len(partes) < 7:
+            continue
+        session_id, usuario, clase, terminal = partes[0], partes[2], partes[5], partes[6]
+        if clase != "user":
+            continue
+
+        try:
+            desde = _ejecutar(["loginctl", "show-session", session_id, "-p", "Timestamp", "--value"]).strip()
+        except RuntimeError:
+            desde = ""
+
+        usuarios.append({
+            "usuario": usuario,
+            "terminal": terminal if terminal != "-" else "?",
+            "tiempo_conexion": f"desde {desde}" if desde else "activa (systemd)",
+        })
+    return usuarios
+
+
+def _usuarios_via_w() -> list[dict]:
+    """Ultimo respaldo: comando `w`, que en algunos sistemas detecta sesiones
+    (via /proc) que ni `who` ni utmp reportan correctamente."""
+    try:
+        salida = _ejecutar(["w", "-h"])
+    except RuntimeError:
+        return []
+
+    usuarios = []
+    for linea in salida.strip().splitlines():
+        partes = linea.split()
+        if len(partes) < 3:
+            continue
+        usuario, terminal, login_desde = partes[0], partes[1], partes[2]
+        usuarios.append({
+            "usuario": usuario,
+            "terminal": terminal,
+            "tiempo_conexion": f"desde {login_desde}",
+        })
+    return usuarios
+
+
+def obtener_usuarios() -> list[dict]:
+    """Usuarios conectados y tiempo de conexión.
+
+    Se intenta primero con `who` (el comando que exige explícitamente la
+    sección 5 del enunciado). Si no reporta nada —posible en sistemas con
+    sesiones gestionadas por systemd-logind en vez del utmp clásico— se
+    recurre a `loginctl` y, como último recurso, a `w`.
+    """
+    for obtener in (_usuarios_via_who, _usuarios_via_loginctl, _usuarios_via_w):
+        usuarios = obtener()
+        if usuarios:
+            return usuarios
+    return []
 
 
 def obtener_interfaces_red() -> list[dict]:
