@@ -84,6 +84,11 @@ def _leer_texto(stdscr, prompt: str) -> str:
     stdscr.addstr(alto - 2, 0, prompt)
     stdscr.refresh()
 
+    # stdscr queda en modo no-bloqueante con timeout de REFRESCO_MS por el
+    # bucle principal; sin desactivarlo aqui, getstr() hereda ese timeout y
+    # corta la entrada si el usuario tarda mas de un segundo en escribir.
+    stdscr.nodelay(False)
+    stdscr.timeout(-1)
     curses.echo()
     curses.curs_set(1)
     try:
@@ -91,6 +96,8 @@ def _leer_texto(stdscr, prompt: str) -> str:
     finally:
         curses.noecho()
         curses.curs_set(0)
+        stdscr.nodelay(True)
+        stdscr.timeout(REFRESCO_MS)
     return texto
 
 
@@ -120,28 +127,81 @@ def _crear_captura(stdscr, estado: EstadoMonitor) -> None:
         _mostrar_mensaje(stdscr, f"Error al capturar: {error}")
 
 
-def _ver_historial(stdscr) -> None:
-    etiqueta = _leer_texto(stdscr, "Filtrar por etiqueta (Enter = ver todo): ")
-    capturas = db_manager.listar_capturas(etiqueta or None)
-
+def _dibujar_tabla_historial(stdscr, capturas: list[dict]) -> None:
     stdscr.erase()
     alto, ancho = stdscr.getmaxyx()
-    stdscr.addstr(0, 0, " HISTORIAL (cualquier tecla para volver) ".center(ancho, "="), curses.A_BOLD)
+    stdscr.addstr(0, 0, " HISTORIAL DE CAPTURAS ".center(ancho, "="), curses.A_BOLD)
 
     if not capturas:
         stdscr.addstr(2, 2, "No hay capturas registradas.")
     else:
         encabezado = f"{'ID':<5}{'Fecha':<21}{'CPU%':<8}{'RAM(KB)':<12}{'Etiquetas':<30}"
         stdscr.addstr(2, 2, encabezado[:ancho - 3], curses.A_UNDERLINE)
-        for fila, captura in enumerate(capturas[:alto - 5], start=3):
+        for fila, captura in enumerate(capturas[:alto - 6], start=3):
             linea = (f"{captura['id']:<5}{captura['fecha_hora']:<21}"
                      f"{captura['cpu_uso']:<8}{captura['ram_usada']:<12}{captura['etiquetas']:<30}")
             stdscr.addstr(fila, 2, linea[:ancho - 3])
 
     stdscr.refresh()
+
+
+def _mostrar_detalle_captura(stdscr, captura: dict) -> None:
+    stdscr.erase()
+    alto, ancho = stdscr.getmaxyx()
+    stdscr.addstr(0, 0, f" DETALLE DE CAPTURA #{captura['id']} (cualquier tecla para volver) "
+                  .center(ancho, "="), curses.A_BOLD)
+
+    campos = [
+        ("Fecha/Hora", captura["fecha_hora"]),
+        ("CPU uso", f"{captura['cpu_uso']}%"),
+        ("RAM total", f"{captura['ram_total']} KB"),
+        ("RAM usada", f"{captura['ram_usada']} KB"),
+        ("Disco total", f"{captura['disco_total']} KB"),
+        ("Disco usada", f"{captura['disco_usada']} KB"),
+        ("Red entrada", f"{captura['red_trafico_in']} bytes"),
+        ("Red salida", f"{captura['red_trafico_out']} bytes"),
+        ("Etiquetas", captura["etiquetas"]),
+    ]
+    for fila, (etiqueta, valor) in enumerate(campos, start=2):
+        stdscr.addstr(fila, 2, f"{etiqueta:<14}: {valor}"[:ancho - 3])
+
+    stdscr.refresh()
     stdscr.nodelay(False)
+    stdscr.timeout(-1)
     stdscr.getch()
     stdscr.nodelay(True)
+    stdscr.timeout(REFRESCO_MS)
+
+
+def _ver_historial(stdscr) -> None:
+    etiqueta = _leer_texto(stdscr, "Filtrar por etiqueta (Enter = ver todo): ")
+    filtro = etiqueta or None
+
+    while True:
+        capturas = db_manager.listar_capturas(filtro)
+        _dibujar_tabla_historial(stdscr, capturas)
+
+        if not capturas:
+            stdscr.nodelay(False)
+            stdscr.timeout(-1)
+            stdscr.getch()
+            stdscr.nodelay(True)
+            stdscr.timeout(REFRESCO_MS)
+            return
+
+        id_texto = _leer_texto(stdscr, "ID para ver detalle (Enter para volver): ")
+        if not id_texto:
+            return
+        if not id_texto.isdigit():
+            _mostrar_mensaje(stdscr, "ID invalido.")
+            continue
+
+        captura = next((c for c in capturas if c["id"] == int(id_texto)), None)
+        if captura is None:
+            _mostrar_mensaje(stdscr, "No se encontro esa captura en la lista actual.")
+            continue
+
+        _mostrar_detalle_captura(stdscr, captura)
 
 
 def _editar_etiquetas(stdscr) -> None:
