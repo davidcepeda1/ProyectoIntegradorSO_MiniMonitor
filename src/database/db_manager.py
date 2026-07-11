@@ -76,6 +76,41 @@ def crear_captura(
         return cursor.lastrowid
 
 
+def listar_capturas(etiqueta: str | None = None, db_path: Path = DB_PATH) -> list[dict]:
+    """Consulta capturas almacenadas, opcionalmente filtradas por etiqueta (LIKE)."""
+    consulta = "SELECT * FROM capturas"
+    parametros: tuple = ()
+
+    if etiqueta:
+        consulta += " WHERE etiquetas LIKE ?"
+        parametros = (f"%{etiqueta}%",)
+
+    consulta += " ORDER BY fecha_hora DESC"
+
+    with get_connection(db_path) as conn:
+        filas = conn.execute(consulta, parametros).fetchall()
+        return [dict(fila) for fila in filas]
+
+
+def actualizar_etiquetas(captura_id: int, etiquetas: list[str], db_path: Path = DB_PATH) -> bool:
+    """Modifica exclusivamente las etiquetas de una captura existente."""
+    etiquetas_texto = _etiquetas_a_texto(etiquetas)
+
+    with get_connection(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE capturas SET etiquetas = ? WHERE id = ?",
+            (etiquetas_texto, captura_id),
+        )
+        return cursor.rowcount > 0
+
+
+def eliminar_captura(captura_id: int, db_path: Path = DB_PATH) -> bool:
+    """Elimina una captura por su id."""
+    with get_connection(db_path) as conn:
+        cursor = conn.execute("DELETE FROM capturas WHERE id = ?", (captura_id,))
+        return cursor.rowcount > 0
+
+
 if __name__ == "__main__":
     init_db()
     print(f"Base de datos inicializada en: {DB_PATH}")
