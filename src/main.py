@@ -142,7 +142,9 @@ def realizar_captura(estado: EstadoMonitor, etiquetas: list[str] | None = None) 
 
 
 def _manejar_sigint(signum, frame) -> None:
-    print("\nSeñal de salida recibida, cerrando hilos...")
+    # No imprime nada aquí: la terminal está controlada por curses mientras
+    # la TUI está activa: escribir directamente la corrompería. Solo se
+    # señaliza la salida; el mensaje final se imprime tras cerrar la TUI.
     evento_salida.set()
 
 
@@ -158,20 +160,16 @@ def main() -> None:
     for hilo in hilos:
         hilo.start()
 
-    print("Mini Monitor de Recursos - nucleo concurrente activo (Ctrl+C para salir).")
-    print("La interfaz interactiva (TUI) se integra en la Semana 5.\n")
+    from src.ui.tui import iniciar_tui  # import diferido: evita import circular con src.main
 
-    while not evento_salida.is_set():
-        evento_salida.wait(INTERVALO_METRICAS)
-        cpu, memoria = estado.snapshot_metricas()
-        alerta = " *** PICO DE RED" if estado.hay_alerta_red() else ""
-        print(
-            f"CPU: {cpu.get('uso_porcentaje', '?')}%  "
-            f"RAM: {memoria.get('ram_usada_kb', '?')}/{memoria.get('ram_total_kb', '?')} KB{alerta}"
-        )
+    try:
+        iniciar_tui(estado)
+    finally:
+        evento_salida.set()
+        for hilo in hilos:
+            hilo.join(timeout=2)
 
-    for hilo in hilos:
-        hilo.join(timeout=2)
+    print("Mini Monitor de Recursos finalizado.")
 
 
 if __name__ == "__main__":

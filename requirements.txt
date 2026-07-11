@@ -1,1 +1,2 @@
-blessed
+# El proyecto no requiere dependencias externas: usa unicamente la
+# biblioteca estandar de Python (sqlite3, curses, subprocess, threading, os).
